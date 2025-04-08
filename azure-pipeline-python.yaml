@@ -1,0 +1,74 @@
+trigger:
+  - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  imageNameFrontend: angular-frontend
+  imageNameBackend: flask-backend
+
+jobs:
+  - job: Build
+    pool:
+      #      vmImage: $(vmImageName)
+      vmImage: 'ubuntu-latest'
+
+    steps:
+      - checkout: self
+
+      - bash: |
+          COMMIT_ID=$(git rev-parse --short HEAD)
+          BUILD_VERSION="${BUILD_BUILDNUMBER}-${COMMIT_ID}"
+          echo "##vso[task.setvariable variable=BUILD_VERSION]$BUILD_VERSION"
+          echo "Versioned Build Number: $BUILD_VERSION"
+        name: Version
+        displayName: 'Versioned Build Number'
+
+      - task: UsePythonVersion@0
+        inputs:
+          versionSpec: '3.x'
+
+      - script: |
+          echo "Installing Python dependencies"
+          cd backend-python
+          pip install -r requirements.txt
+          echo "Running Python tests with coverage"
+          coverage run -m pytest
+          coverage report
+          coverage xml
+        displayName: "Python Test & Coverage"
+
+      - script: |
+          echo "Installing Angular CLI"
+          npm install -g @angular/cli
+          cd frontend
+          npm install
+          npm run build
+        displayName: "Angular Build"
+
+      - script: |
+          echo "Building Docker images"
+          docker build -t $(imageNameFrontend):$BUILD_VERSION -f frontend/Dockerfile.frontend .
+          docker tag $(imageNameFrontend):$BUILD_VERSION $(DOCKER_USERNAME)/$(imageNameFrontend):$BUILD_VERSION
+          
+          docker build -t $(imageNameBackend):$BUILD_VERSION -f backend-python/Dockerfile.backend .
+          docker tag $(imageNameBackend):$BUILD_VERSION $(DOCKER_USERNAME)/$(imageNameBackend):$BUILD_VERSION
+        displayName: "Docker Build and Tag"
+
+      - script: |
+          echo "Logging in and pushing Docker images"
+          echo $(DOCKER_PASSWORD) | docker login -u $(DOCKER_USERNAME) --password-stdin
+          docker push $(DOCKER_USERNAME)/$(imageNameFrontend):$BUILD_VERSION
+          docker push $(DOCKER_USERNAME)/$(imageNameBackend):$BUILD_VERSION
+        env:
+          DOCKER_USERNAME: $(DOCKER_USERNAME)
+          DOCKER_PASSWORD: $(DOCKER_PASSWORD)
+        displayName: "Docker Push"
+
+      - task: PublishCodeCoverageResults@1
+        inputs:
+          codeCoverageTool: 'Cobertura'
+          summaryFileLocation: 'backend-python/coverage.xml'
+          reportDirectory: 'backend-python'
+        displayName: 'Publish Python Code Coverage'

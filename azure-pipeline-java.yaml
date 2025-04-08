@@ -1,0 +1,93 @@
+trigger:
+  - main
+  
+variables:
+  BACKEND_IMAGE: $(DOCKER_HUB_USERNAME)/java-backend
+  FRONTEND_IMAGE: $(DOCKER_HUB_USERNAME)/angular-frontend
+
+jobs:
+  - job: Build
+    pool:
+      #      vmImage: $(vmImageName)
+      vmImage: 'ubuntu-latest'
+
+    steps:
+      - checkout: self
+
+      - bash: |
+          COMMIT_ID=$(git rev-parse --short HEAD)
+          BUILD_VERSION="${BUILD_BUILDNUMBER}-${COMMIT_ID}"
+          echo "##vso[task.setvariable variable=BUILD_VERSION]$BUILD_VERSION"
+          echo "Versioned Build Number: $BUILD_VERSION"
+        name: Version
+        displayName: 'Versioned Build Number'
+
+      - task: Bash@3
+        condition: eq(variables['frontend.enabled'], 'true')
+        displayName: 'Install Node.js and Angular CLI'
+        inputs:
+          targetType: 'inline'
+          script: |
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            sudo npm install -g @angular/cli
+
+      - task: Bash@3
+        condition: eq(variables['frontend.enabled'], 'true')
+        displayName: 'Build Frontend'
+        inputs:
+          targetType: 'inline'
+          script: |
+            cd frontend
+            npm install
+            npm run build
+
+      - task: JavaToolInstaller@1
+        condition: eq(variables['backend.enabled'], 'true')
+        inputs:
+          versionSpec: '17'
+          jdkArchitectureOption: 'x64'
+          jdkSourceOption: 'PreInstalled'
+
+      - task: Bash@3
+        condition: eq(variables['backend.enabled'], 'true')
+        displayName: 'Build Backend'
+        inputs:
+          targetType: 'inline'
+          script: |
+            cd backend-java
+            java -version
+            mvn clean package
+
+      - task: PublishCodeCoverageResults@1
+        condition: eq(variables['backend.enabled'], 'true')
+        displayName: 'Publish Java Code Coverage'
+        inputs:
+          codeCoverageTool: 'JaCoCo'
+          summaryFileLocation: 'backend/target/site/jacoco/jacoco.xml'
+          reportDirectory: 'backend/target/site/jacoco'
+
+      - task: Bash@3
+        displayName: 'Build Docker Images'
+        inputs:
+          targetType: 'inline'
+          script: |
+            cd backend-java
+            docker build -t $(BACKEND_IMAGE):$BUILD_VERSION -f Dockerfile.backend .
+            cd ../frontend
+            docker build -t $(FRONTEND_IMAGE):$BUILD_VERSION -f Dockerfile.frontend .
+
+      - task: Bash@3
+        displayName: 'Docker Login'
+        inputs:
+          targetType: 'inline'
+          script: |
+            echo $(DOCKER_HUB_PASSWORD) | docker login -u $(DOCKER_HUB_USERNAME) --password-stdin
+
+      - task: Bash@3
+        displayName: 'Push Docker Images to Docker Hub'
+        inputs:
+          targetType: 'inline'
+          script: |
+            docker push $(BACKEND_IMAGE):$BUILD_VERSION
+            docker push $(FRONTEND_IMAGE):$BUILD_VERSION

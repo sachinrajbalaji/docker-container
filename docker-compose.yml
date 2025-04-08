@@ -1,0 +1,19 @@
+version: "3.8"
+services:
+  backend-java:
+    image: "${BACKEND_JAVA_IMAGE}"
+    ports:
+      - "8080:8080"
+
+  backend-python:
+    image: "${BACKEND_PYTHON_IMAGE}"
+    ports:
+      - "5000:5000"
+
+  frontend:
+    image: "${FRONTEND_IMAGE}"
+    ports:
+      - "80:80"
+    depends_on:
+      - backend-java
+      - backend-python
